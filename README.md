@@ -1,6 +1,6 @@
 # op9
 
-Building entry operator — accepts intercom calls via Twilio and opens the door by sending DTMF tones.
+Building entry operator — accepts calls via Twilio and opens the door by sending DTMF tones. Dubbed `op9` because `9` is the tone that unlocks the door.
 
 ## How it works
 
@@ -8,27 +8,9 @@ Building entry operator — accepts intercom calls via Twilio and opens the door
 Intercom → Twilio number → POST /voice → TwiML → DTMF "9" → door unlocks
 ```
 
-Every call is accepted automatically. Recordings are stored in Twilio (not locally).
-
-## Setup
-
-```bash
-uv sync
-cp .env.example .env   # add TWILIO_AUTH_TOKEN
-uv run uvicorn app:app --reload --port 8000
-```
-
-Point your Twilio number's voice webhook to `https://your-host/voice` (POST).
-
-## Configuration
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TWILIO_AUTH_TOKEN` | — | Twilio auth token (webhook signature validation) |
-| `OPEN_DIGITS` | `ww9` | DTMF digits to play (`w` = half-second pause) |
-| `RECORD_CALLS` | `true` | Record calls via Twilio |
-
 ## Deploy to Cloud Run
+
+For config see `config.py`
 
 ```bash
 gcloud run deploy op9 \
@@ -38,8 +20,18 @@ gcloud run deploy op9 \
   --set-env-vars "OPEN_DIGITS=ww9,RECORD_CALLS=true,TWILIO_AUTH_TOKEN=..."
 ```
 
+```bash
+gcloud run services logs read op9 --project operator9 --region us-central1 --limit 50
+```
+
 Recordings appear in the Twilio console under **Monitor → Logs → Call logs**.
 
-## Warning
+# Notes
 
-This MVP opens the door for every caller. Use only for testing or short windows until phrase/code/manual modes are added.
+## Mode 1 - `auto`
+
+Automatically open the door when prompted. This is the most insecure but was the first tested mode
+
+## Mode 2 - `passcode`
+
+Users have to enter a configurable passcode, it is submitted via DTFM and approved/disapproved.
