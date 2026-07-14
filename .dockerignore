@@ -3,3 +3,9 @@
 .git/
 __pycache__/
 *.pyc
+
+# Never bake secrets into the image — Cloud Run injects them from Secret Manager.
+secrets/
+
+# Test-only; not needed at runtime.
+test_*.py
