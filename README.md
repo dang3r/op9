@@ -10,21 +10,25 @@ Intercom → Twilio number → POST /voice → TwiML → DTMF "9" → door unloc
 
 ## Deploy to Cloud Run
 
-For config see `config.py`
+Non-secret config lives in `env.yaml`. Secrets live in Secret Manager, backed by gitignored files in `secrets/`.
 
 ```bash
+# Push secrets to Secret Manager
+./push-secrets.sh                 # all three
+./push-secrets.sh agent-context   # or just the one you changed
+
+# `--timeout=900` is needed for `voice-agent` mode: Cloud Run's request timeout applies to WebSockets and defaults to 5 minutes.
 gcloud run deploy op9 \
   --source . \
   --region us-central1 \
   --allow-unauthenticated \
-  --set-env-vars "OPEN_DIGITS=ww9,RECORD_CALLS=true,TWILIO_AUTH_TOKEN=..."
-```
+  --timeout=900 \
+  --env-vars-file env.yaml \
+  --set-secrets "ANTHROPIC_API_KEY=anthropic-api-key:latest,TWILIO_AUTH_TOKEN=twilio-auth-token:latest,AGENT_CONTEXT=agent-context:latest"
 
-```bash
+# Gather logs
 gcloud run services logs read op9 --project operator9 --region us-central1 --limit 50
 ```
-
-Recordings appear in the Twilio console under **Monitor → Logs → Call logs**.
 
 # Notes
 
@@ -35,3 +39,38 @@ Automatically open the door when prompted. This is the most insecure but was the
 ## Mode 2 - `passcode`
 
 Users have to enter a configurable passcode, it is submitted via DTFM and approved/disapproved.
+
+## Mode 3 - `voice-agent`
+
+An LLM talks to the visitor and decides whether to let them in.
+
+```text
+Intercom → Twilio → /voice → <Connect><ConversationRelay wss://…/relay>
+                                          ↕
+                              /relay WebSocket ← LLM loop → sendDigits "ww9"
+```
+
+Twilio's **ConversationRelay** does the speech-to-text and text-to-speech and bridges the call to our `/relay` WebSocket. We only ever exchange JSON text frames — no audio handling on our side. That is also why swapping in ElevenLabs later is one TwiML attribute (`AGENT_TTS_PROVIDER=ElevenLabs` + `AGENT_VOICE=<id>`) and no code change.
+
+### The model gets exactly two tools
+
+| Tool | Effect |
+|---|---|
+| `open_door(reason)` | send `{"type":"sendDigits","digits":"ww9"}`, hang up |
+| `deny_entry(reason)` | say goodbye, hang up |
+
+Asking the visitor a question is deliberately **not** a tool — plain assistant text is already spoken to the caller, so a question needs no tool at all. That leaves the tool surface as exactly the two decisions with a security consequence, each carrying a `reason` that lands in the logs.
+
+### Fail closed
+
+The door is opened by **one line** in `app.py`, reached only when the model calls `open_door`. Every other way out of the relay loop — an Anthropic outage, a malformed frame, the turn cap, the caller hanging up, a bug — falls through to a `finally` with the door shut. The correct behavior is the one you get by doing nothing.
+
+### Tests
+
+The offline suite drives `/relay` over a real WebSocket with the Anthropic call stubbed, so it needs no API key and no network:
+
+```bash
+uv run pytest test_relay.py -v
+```
+
+The assertion that matters is `test_model_failure_does_not_open_the_door` — it forces the LLM call to blow up and asserts no `sendDigits` frame is ever sent.
