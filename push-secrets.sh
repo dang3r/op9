@@ -14,7 +14,13 @@
 set -euo pipefail
 
 PROJECT="${GCP_PROJECT:-operator9}"
-SECRETS=("anthropic-api-key" "twilio-auth-token" "agent-context")
+SECRETS=(
+  "anthropic-api-key"
+  "twilio-auth-token"
+  "agent-context"
+  "twilio-account-sid"  # authenticates the REST client for post-call SMS
+  "notify-sms-to"       # personal number the call summary is texted to
+)
 
 cd "$(dirname "$0")"
 
@@ -40,4 +46,4 @@ echo
 echo "Deploy to pick these up:"
 echo "  gcloud run deploy op9 --source . --region us-central1 \\"
 echo "    --allow-unauthenticated --timeout=900 --env-vars-file env.yaml \\"
-echo "    --set-secrets \"ANTHROPIC_API_KEY=anthropic-api-key:latest,TWILIO_AUTH_TOKEN=twilio-auth-token:latest,AGENT_CONTEXT=agent-context:latest\""
+echo "    --set-secrets \"ANTHROPIC_API_KEY=anthropic-api-key:latest,TWILIO_AUTH_TOKEN=twilio-auth-token:latest,AGENT_CONTEXT=agent-context:latest,TWILIO_ACCOUNT_SID=twilio-account-sid:latest,NOTIFY_SMS_TO=notify-sms-to:latest\""

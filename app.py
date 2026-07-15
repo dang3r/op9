@@ -1,15 +1,25 @@
+import asyncio
 import hmac
 import json
 import logging
 from typing import Any
 
 import anthropic
-from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    HTTPException,
+    Request,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from twilio.request_validator import RequestValidator
 from twilio.twiml.voice_response import Connect, Gather, Start, VoiceResponse
 
 import agent
 import config
+import notify
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
 log = logging.getLogger("op9")
@@ -139,7 +149,7 @@ def _open_door(response: VoiceResponse) -> None:
 
 
 @app.post("/voice")
-async def voice(request: Request) -> Response:
+async def voice(request: Request, background: BackgroundTasks) -> Response:
     """Twilio voice webhook: dispatch to the configured call-handling mode."""
     form = await request.form()
     params = dict(form)
@@ -157,6 +167,19 @@ async def voice(request: Request) -> Response:
         twiml = build_passcode_twiml(f"{base}passcode")
     elif config.MODE == "auto":
         twiml = build_auto_entry_twiml(f"{base}recording-status")
+        # auto opens for everyone, so the call is decided here and now. Queue the
+        # SMS as a background task so the Twilio round-trip does not sit between
+        # this request and the door-opening TwiML — the door must not wait on a
+        # text. FastAPI runs the blocking send in a threadpool after the response
+        # is sent, and notify swallows its own errors either way.
+        background.add_task(
+            notify.send_call_summary,
+            mode="auto",
+            from_number=params.get("From"),
+            to_number=params.get("To"),
+            approved=True,
+            outcome="opened",
+        )
     elif config.MODE == "voice-agent":
         # ConversationRelay requires a wss:// URL. base is https:// in
         # production (Cloud Run terminates TLS) and http:// only in local dev.
@@ -173,7 +196,7 @@ async def voice(request: Request) -> Response:
 
 
 @app.post("/passcode")
-async def passcode(request: Request) -> Response:
+async def passcode(request: Request, background: BackgroundTasks) -> Response:
     """Twilio gather callback: verify the DTMF passcode and open on a match."""
     form = await request.form()
     params = dict(form)
@@ -202,6 +225,20 @@ async def passcode(request: Request) -> Response:
         _open_door(response)
     else:
         response.say("Incorrect passcode. Goodbye.")
+
+    # A timed-out call ("no passcode entered") is served by TwiML in
+    # build_passcode_twiml and never reaches here, so it is not notified — the
+    # same reason it leaves no "passcode:" log line. Every call that does reach
+    # here is a real decision worth a text. Queue it as a background task so the
+    # Twilio SMS round-trip never sits between this request and the TwiML.
+    background.add_task(
+        notify.send_call_summary,
+        mode="passcode",
+        from_number=params.get("From"),
+        to_number=params.get("To"),
+        approved=matched,
+        outcome="opened" if matched else "incorrect passcode",
+    )
 
     response.hangup()
     return Response(content=str(response), media_type="application/xml")
@@ -251,6 +288,18 @@ async def relay(ws: WebSocket) -> None:
     opened = False
     turns = 0
 
+    # For the post-call SMS, sent once from the finally. caller_from/service_to
+    # come off the setup frame; authenticated gates the send so unauthenticated
+    # probes (which fail the secret check) never text anyone. outcome/reason are
+    # set at whichever terminal branch we leave through; approved is True on open,
+    # False on any deny, and stays None if the call ends with no decision.
+    caller_from: str | None = None
+    service_to: str | None = None
+    authenticated = False
+    approved: bool | None = None
+    outcome = "caller hung up"
+    reason = ""
+
     client = anthropic.AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
 
     try:
@@ -266,10 +315,17 @@ async def relay(ws: WebSocket) -> None:
                 if not hmac.compare_digest(got, config.RELAY_SECRET):
                     log.warning("relay: CallSid=%s bad secret, closing", call_sid)
                     return
+                # Past the secret check: this is a real Twilio call. The setup
+                # frame carries the caller (from) and our own number (to); we
+                # text the summary from the latter. authenticated gates that
+                # send, so probes that never get here are never texted.
+                authenticated = True
+                caller_from = frame.get("from")
+                service_to = frame.get("to")
                 log.info(
                     "relay: CallSid=%s From=%s connected",
                     call_sid,
-                    frame.get("from"),
+                    caller_from,
                 )
                 continue
 
@@ -287,6 +343,8 @@ async def relay(ws: WebSocket) -> None:
                     # A visitor who cannot explain themselves in this many turns
                     # does not get in by wearing us down.
                     log.info("relay: CallSid=%s turn cap reached, denying", call_sid)
+                    approved = False
+                    outcome = "denied (turn cap)"
                     await _say(ws, "Sorry, I can't let you in. Goodbye.")
                     await _hang_up(ws)
                     return
@@ -300,6 +358,9 @@ async def relay(ws: WebSocket) -> None:
                     log.info(
                         "relay: CallSid=%s OPEN reason=%r", call_sid, decision.reason
                     )
+                    approved = True
+                    outcome = "opened"
+                    reason = decision.reason
                     await _say(ws, "Come on in.")
                     # The one line in this file that opens the door. Queued ahead
                     # of the hang-up sleep, so the door opens even if the audio
@@ -315,6 +376,9 @@ async def relay(ws: WebSocket) -> None:
                     log.info(
                         "relay: CallSid=%s DENY reason=%r", call_sid, decision.reason
                     )
+                    approved = False
+                    outcome = "denied"
+                    reason = decision.reason
                     await _say(ws, "Sorry, I can't let you in. Goodbye.")
                     await _hang_up(ws)
                     return
@@ -334,14 +398,34 @@ async def relay(ws: WebSocket) -> None:
             # frame carries whatever the visitor actually said.
 
     except WebSocketDisconnect:
+        # outcome stays "caller hung up" (its default) unless a decision above
+        # already set it — a caller can drop after being admitted or denied.
         log.info("relay: CallSid=%s caller hung up", call_sid)
     except Exception:
         # An LLM outage, a malformed frame, a bug in this loop — none of them are
         # a reason to open a door. Log it and fall through to the finally.
+        if approved is None:
+            outcome = "error"
         log.exception("relay: CallSid=%s failed, denying", call_sid)
     finally:
         if not opened:
             log.info("relay: CallSid=%s closed without opening", call_sid)
+        # One summary per call, from the single exit every path funnels through.
+        # Gated on authenticated so unauthenticated probes are never texted. Run
+        # off-thread: the Twilio client is blocking and this is an async handler.
+        # notify swallows its own errors, so this can neither raise nor hang the
+        # loop's teardown in a way that affects the door.
+        if authenticated:
+            await asyncio.to_thread(
+                notify.send_call_summary,
+                mode="voice-agent",
+                from_number=caller_from,
+                to_number=service_to,
+                approved=approved,
+                outcome=outcome,
+                reason=reason,
+                transcript=notify.render_transcript(messages),
+            )
 
 
 @app.post("/recording-status")

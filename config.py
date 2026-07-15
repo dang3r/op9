@@ -18,6 +18,19 @@ OPEN_DIGITS: str = os.getenv("OPEN_DIGITS", "ww9")
 RECORD_CALLS: bool = os.getenv("RECORD_CALLS", "true").lower() == "true"
 TWILIO_AUTH_TOKEN: str = os.getenv("TWILIO_AUTH_TOKEN", "")
 
+# Post-call SMS summary. After every completed call, notify.send_call_summary
+# texts a summary to NOTIFY_SMS_TO. The Twilio REST client authenticates with
+# the account SID + the auth token above; the SMS is sent *from* the service's
+# own Twilio number, read off each webhook, so there is no from-number here.
+# Notifications are enabled only when the SID, the auth token, and the
+# destination are all set — otherwise the helper no-ops, which is what keeps
+# local dev and any unconfigured deploy working unchanged.
+TWILIO_ACCOUNT_SID: str = os.getenv("TWILIO_ACCOUNT_SID", "")
+NOTIFY_SMS_TO: str = os.getenv("NOTIFY_SMS_TO", "")
+# IANA zone for the timestamp in the SMS. zoneinfo renders EST/EDT correctly by
+# date, so the "EST?" in the ask is just this default.
+NOTIFY_TIMEZONE: str = os.getenv("NOTIFY_TIMEZONE", "America/New_York")
+
 # Passcode mode: the single valid passcode. numDigits is derived from its
 # length, so there is nothing extra to keep in sync. Required only in passcode
 # mode — the other modes never read it.
