@@ -24,7 +24,7 @@ gcloud run deploy op9 \
   --allow-unauthenticated \
   --timeout=900 \
   --env-vars-file env.yaml \
-  --set-secrets "ANTHROPIC_API_KEY=anthropic-api-key:latest,TWILIO_AUTH_TOKEN=twilio-auth-token:latest,AGENT_CONTEXT=agent-context:latest"
+  --set-secrets "ANTHROPIC_API_KEY=anthropic-api-key:latest,TWILIO_AUTH_TOKEN=twilio-auth-token:latest,AGENT_CONTEXT=agent-context:latest,TWILIO_ACCOUNT_SID=twilio-account-sid:latest,NOTIFY_SMS_TO=notify-sms-to:latest"
 
 # Gather logs
 gcloud run services logs read op9 --project operator9 --region us-central1 --limit 50
@@ -65,12 +65,8 @@ Asking the visitor a question is deliberately **not** a tool — plain assistant
 
 The door is opened by **one line** in `app.py`, reached only when the model calls `open_door`. Every other way out of the relay loop — an Anthropic outage, a malformed frame, the turn cap, the caller hanging up, a bug — falls through to a `finally` with the door shut. The correct behavior is the one you get by doing nothing.
 
-### Tests
+## Post-call SMS
 
-The offline suite drives `/relay` over a real WebSocket with the Anthropic call stubbed, so it needs no API key and no network:
+After every completed call — in any mode, on approve, deny, hang-up, or error — a text summary is sent to a personal number. It carries who called, the verdict (`APPROVED` / `DENIED` / `NO DECISION`), the time in `America/New_York` (EST/EDT), the decision's reason when there is one, and, in voice-agent mode, the full visitor/operator transcript.
 
-```bash
-uv run pytest test_relay.py -v
-```
-
-The assertion that matters is `test_model_failure_does_not_open_the_door` — it forces the LLM call to blow up and asserts no `sendDigits` frame is ever sent.
+The SMS is sent *from* the service's own Twilio number (read off each webhook — the number that receives the buzz is SMS-capable), so there is no separate from-number to configure. Sending is best-effort: it authenticates with `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` and any failure is logged and swallowed, never touching the door decision. It stays off entirely unless `TWILIO_ACCOUNT_SID` and `NOTIFY_SMS_TO` are both set.
