@@ -1,24 +1,3 @@
-"""Post-call SMS summaries.
-
-After every completed call, app.py calls send_call_summary to text a summary to
-NOTIFY_SMS_TO: who called, whether the door opened, when (in NOTIFY_TIMEZONE),
-and — for voice-agent mode — the conversation transcript.
-
-This module owns every SMS concern so app.py stays about call handling. Two
-invariants hold no matter what:
-
-  1. It is best-effort. The send is wrapped so a Twilio outage, a bad number, or
-     any other failure is logged and swallowed — never raised. The door is
-     decided in app.py by one line, and nothing here may perturb it.
-  2. It no-ops unless configured. With the account SID, auth token, and
-     destination all set it sends; otherwise it returns quietly, so local dev
-     and unconfigured deploys behave exactly as before this feature existed.
-
-The SMS is sent *from* the service's own Twilio number, which is passed in per
-call (read off the Twilio webhook), not stored in config — the number that
-receives the buzz is SMS-capable and doubles as the sender.
-"""
-
 import logging
 from datetime import datetime
 from typing import Any
@@ -36,18 +15,12 @@ _MAX_BODY = 1400
 
 def _configured() -> bool:
     """Do we have everything needed to send? If not, sending is a no-op."""
-    return bool(
-        config.TWILIO_ACCOUNT_SID
-        and config.TWILIO_AUTH_TOKEN
-        and config.NOTIFY_SMS_TO
-    )
+    return bool(config.TWILIO_ACCOUNT_SID and config.TWILIO_AUTH_TOKEN and config.NOTIFY_SMS_TO)
 
 
 def _now_str() -> str:
     """Current time in the configured zone, e.g. '2026-07-14 09:32 PM EDT'."""
-    return datetime.now(ZoneInfo(config.NOTIFY_TIMEZONE)).strftime(
-        "%Y-%m-%d %I:%M %p %Z"
-    )
+    return datetime.now(ZoneInfo(config.NOTIFY_TIMEZONE)).strftime("%Y-%m-%d %I:%M %p %Z")
 
 
 def render_transcript(messages: list[dict[str, Any]]) -> str:
