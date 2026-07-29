@@ -110,6 +110,34 @@ def build_body(
     return body
 
 
+def _send(to_number: str, body: str, *, what: str) -> bool:
+    """Send one SMS from the service number. Returns True on success."""
+    if not _configured():
+        log.debug("notify: not configured, skipping %s", what)
+        return False
+    if not to_number:
+        log.debug("notify: no service number to send from, skipping %s", what)
+        return False
+
+    try:
+        # Imported lazily so an unconfigured deploy never pays for the client,
+        # and so importing this module has no Twilio dependency at rest.
+        from twilio.rest import Client
+
+        client = Client(config.TWILIO_ACCOUNT_SID, config.TWILIO_AUTH_TOKEN)
+        client.messages.create(
+            to=config.NOTIFY_SMS_TO,
+            from_=to_number,
+            body=body,
+        )
+        log.info("notify: sent %s", what)
+        return True
+    except Exception:
+        # A failed text must never affect a call. Log and move on.
+        log.exception("notify: failed to send %s", what)
+        return False
+
+
 def send_call_summary(
     *,
     mode: str,
@@ -125,33 +153,41 @@ def send_call_summary(
     `to_number` is the service's own Twilio number (the SMS sender), read off
     the Twilio webhook. Without it there is nobody to send from, so we no-op.
     """
-    if not _configured():
-        log.debug("notify: not configured, skipping SMS")
-        return
     if not to_number:
         log.debug("notify: no service number to send from, skipping SMS")
         return
 
-    try:
-        # Imported lazily so an unconfigured deploy never pays for the client,
-        # and so importing this module has no Twilio dependency at rest.
-        from twilio.rest import Client
+    body = build_body(
+        mode=mode,
+        from_number=from_number,
+        approved=approved,
+        outcome=outcome,
+        reason=reason,
+        transcript=transcript,
+    )
+    _send(to_number, body, what=f"call summary ({mode}, {outcome})")
 
-        body = build_body(
-            mode=mode,
-            from_number=from_number,
-            approved=approved,
-            outcome=outcome,
-            reason=reason,
-            transcript=transcript,
-        )
-        client = Client(config.TWILIO_ACCOUNT_SID, config.TWILIO_AUTH_TOKEN)
-        client.messages.create(
-            to=config.NOTIFY_SMS_TO,
-            from_=to_number,
-            body=body,
-        )
-        log.info("notify: sent call summary (%s, %s)", mode, outcome)
-    except Exception:
-        # A failed text must never affect a call. Log and move on.
-        log.exception("notify: failed to send call summary")
+
+def build_approval_body(*, claim: str, timeout: int) -> str:
+    """Compose the in-call 'unknown visitor — reply YES/NO' SMS."""
+    claim_line = (claim or "").strip() or "(said nothing useful)"
+    if len(claim_line) > 200:
+        claim_line = claim_line[:199] + "…"
+    return (
+        f'op9 · door — someone says "{claim_line}". '
+        f"Reply YES or NO ({timeout}s)."
+    )
+
+
+def send_approval_request(
+    *,
+    to_number: str | None,
+    claim: str,
+    timeout: int,
+) -> bool:
+    """Text the resident for a live YES/NO. Returns False if it could not send."""
+    if not to_number:
+        log.debug("notify: no service number to send from, skipping approval request")
+        return False
+    body = build_approval_body(claim=claim, timeout=timeout)
+    return _send(to_number, body, what="approval request")
