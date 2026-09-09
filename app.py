@@ -347,6 +347,25 @@ async def _open_and_release(ws: WebSocket) -> None:
     await asyncio.sleep(config.OPEN_DIGITS_SETTLE)
 
 
+async def _authenticate_relay_setup(
+    ws: WebSocket, *, endpoint: str
+) -> tuple[str, str | None, str | None] | None:
+    """Require and authenticate ConversationRelay's first setup frame."""
+    raw = await ws.receive_text()
+    frame = json.loads(raw)
+    if frame.get("type") != "setup":
+        log.warning("%s: first frame was not setup, closing", endpoint)
+        return None
+
+    call_sid = frame.get("callSid", "unknown")
+    got = (frame.get("customParameters") or {}).get("secret", "")
+    if not isinstance(got, str) or not hmac.compare_digest(got, config.RELAY_SECRET):
+        log.warning("%s: CallSid=%s bad secret, closing", endpoint, call_sid)
+        return None
+
+    return call_sid, frame.get("from"), frame.get("to")
+
+
 @app.websocket("/relay")
 async def relay(ws: WebSocket) -> None:
     """ConversationRelay WebSocket: talk to the visitor, decide, open or not.
@@ -384,31 +403,20 @@ async def relay(ws: WebSocket) -> None:
     client = anthropic.AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
 
     try:
+        setup = await _authenticate_relay_setup(ws, endpoint="relay")
+        if setup is None:
+            return
+        call_sid, caller_from, service_to = setup
+        authenticated = True
+        log.info("relay: CallSid=%s From=%s connected", call_sid, caller_from)
+
         async for raw in ws.iter_text():
             frame = json.loads(raw)
             kind = frame.get("type")
 
             if kind == "setup":
-                call_sid = frame.get("callSid", "unknown")
-                # The secret came from the TwiML we served. A socket that cannot
-                # produce it never saw that TwiML, so it is not Twilio.
-                got = (frame.get("customParameters") or {}).get("secret", "")
-                if not hmac.compare_digest(got, config.RELAY_SECRET):
-                    log.warning("relay: CallSid=%s bad secret, closing", call_sid)
-                    return
-                # Past the secret check: this is a real Twilio call. The setup
-                # frame carries the caller (from) and our own number (to); we
-                # text the summary from the latter. authenticated gates that
-                # send, so probes that never get here are never texted.
-                authenticated = True
-                caller_from = frame.get("from")
-                service_to = frame.get("to")
-                log.info(
-                    "relay: CallSid=%s From=%s connected",
-                    call_sid,
-                    caller_from,
-                )
-                continue
+                log.warning("relay: CallSid=%s duplicate setup, closing", call_sid)
+                return
 
             if kind == "prompt":
                 # Twilio streams partial transcripts; wait for the complete one.
@@ -597,23 +605,24 @@ async def relay_people(ws: WebSocket) -> None:
     client = anthropic.AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
 
     try:
+        setup = await _authenticate_relay_setup(ws, endpoint="relay-people")
+        if setup is None:
+            return
+        call_sid, caller_from, service_to = setup
+        authenticated = True
+        log.info(
+            "relay-people: CallSid=%s From=%s connected", call_sid, caller_from
+        )
+
         async for raw in ws.iter_text():
             frame = json.loads(raw)
             kind = frame.get("type")
 
             if kind == "setup":
-                call_sid = frame.get("callSid", "unknown")
-                got = (frame.get("customParameters") or {}).get("secret", "")
-                if not hmac.compare_digest(got, config.RELAY_SECRET):
-                    log.warning("relay-people: CallSid=%s bad secret, closing", call_sid)
-                    return
-                authenticated = True
-                caller_from = frame.get("from")
-                service_to = frame.get("to")
-                log.info(
-                    "relay-people: CallSid=%s From=%s connected", call_sid, caller_from
+                log.warning(
+                    "relay-people: CallSid=%s duplicate setup, closing", call_sid
                 )
-                continue
+                return
 
             if kind == "prompt":
                 if not frame.get("last"):

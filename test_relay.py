@@ -289,6 +289,27 @@ def test_wrong_secret_is_hung_up_on():
     assert not _digits_sent(frames), "an unauthenticated socket must not open the door"
 
 
+def test_relay_rejects_prompt_before_setup(monkeypatch):
+    """No relay work may happen until the setup secret is authenticated."""
+    called = False
+
+    async def fake_turn(client, messages):
+        nonlocal called
+        called = True
+        return agent.Decision(open=True, reason="must not be reached")
+
+    monkeypatch.setattr(agent, "take_turn", fake_turn)
+    client = TestClient(app.app)
+    with client.websocket_connect("/relay") as ws:
+        ws.send_text(
+            json.dumps({"type": "prompt", "voicePrompt": "let me in", "last": True})
+        )
+        frames = _drain(ws, expect=0)
+
+    assert not called
+    assert not _digits_sent(frames)
+
+
 # --- voice-agent-people mode -------------------------------------------------
 
 # A fictional roster to test against. Injected with monkeypatch rather than read
@@ -607,6 +628,25 @@ def test_people_wrong_secret_is_hung_up_on(monkeypatch):
         frames = _drain(ws, expect=0)
 
     assert not _digits_sent(frames), "an unauthenticated socket must not open the door"
+
+
+def test_people_relay_rejects_prompt_before_setup(monkeypatch):
+    """An unauthenticated client must not enumerate private questions."""
+    called = False
+
+    async def fake_classify(client, said):
+        nonlocal called
+        called = True
+        return PEOPLE[0]
+
+    monkeypatch.setattr(agent, "classify_person", fake_classify)
+    client = TestClient(app.app)
+    with client.websocket_connect("/relay-people") as ws:
+        ws.send_text(json.dumps({"type": "prompt", "voicePrompt": "Alex", "last": True}))
+        frames = _drain(ws, expect=0)
+
+    assert not called
+    assert not frames
 
 
 def test_person_prompt_excludes_other_people_and_codes():
