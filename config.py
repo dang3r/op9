@@ -37,6 +37,7 @@ TWILIO_AUTH_TOKEN: str = os.getenv("TWILIO_AUTH_TOKEN", "")
 # destination are all set — otherwise the helper no-ops, which is what keeps
 # local dev and any unconfigured deploy working unchanged.
 TWILIO_ACCOUNT_SID: str = os.getenv("TWILIO_ACCOUNT_SID", "")
+E2E_CALLER_NUMBER: str = os.getenv("E2E_CALLER_NUMBER", "").strip()
 NOTIFY_SMS_TO: str = os.getenv("NOTIFY_SMS_TO", "")
 # IANA zone for the timestamp in the SMS. zoneinfo renders EST/EDT correctly by
 # date, so the "EST?" in the ask is just this default.

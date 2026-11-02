@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -92,8 +93,9 @@ def build_body(
     else:
         verdict = "NO DECISION"
 
+    prefix = "[TEST] " if config.E2E_CALLER_NUMBER and from_number == config.E2E_CALLER_NUMBER else ""
     lines = [
-        f"op9 · {mode}",
+        f"{prefix}op9 · {mode}",
         f"From: {from_number or 'unknown'}",
         f"{verdict} — {outcome}",
         _now_str(),
@@ -123,14 +125,24 @@ def _send(to_number: str, body: str, *, what: str) -> bool:
         # Imported lazily so an unconfigured deploy never pays for the client,
         # and so importing this module has no Twilio dependency at rest.
         from twilio.rest import Client
+        from twilio.http.http_client import TwilioHttpClient
 
-        client = Client(config.TWILIO_ACCOUNT_SID, config.TWILIO_AUTH_TOKEN)
-        client.messages.create(
+        started = time.monotonic()
+        log.info("notify: submitting %s", what)
+        client = Client(
+            config.TWILIO_ACCOUNT_SID,
+            config.TWILIO_AUTH_TOKEN,
+            http_client=TwilioHttpClient(timeout=3, max_retries=0),
+        )
+        message = client.messages.create(
             to=config.NOTIFY_SMS_TO,
             from_=to_number,
             body=body,
         )
-        log.info("notify: sent %s", what)
+        log.info(
+            "notify: accepted %s sid=%s status=%s elapsed_ms=%.0f",
+            what, message.sid, message.status, (time.monotonic() - started) * 1000,
+        )
         return True
     except Exception:
         # A failed text must never affect a call. Log and move on.

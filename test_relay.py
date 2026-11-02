@@ -718,6 +718,7 @@ def test_voice_twiml_hands_off_to_conversation_relay(monkeypatch):
     # POST would 403. Skipping it is exactly what config does when no token is
     # configured (see _validate_twilio_request).
     monkeypatch.setattr(config, "TWILIO_AUTH_TOKEN", "")
+    monkeypatch.setattr(config, "MODE", "voice-agent")
 
     client = TestClient(app.app)
     resp = client.post("/voice", data={"CallSid": "CA_test", "From": "+15551234567"})

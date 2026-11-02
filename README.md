@@ -142,3 +142,43 @@ Same property as Mode 3, with three opening lines instead of one — question pa
 After every completed call — in any mode, on approve, deny, hang-up, or error — a text summary is sent to a personal number. It carries who called, the verdict (`APPROVED` / `DENIED` / `NO DECISION`), the time in `America/New_York` (EST/EDT), the decision's reason when there is one, and, in voice-agent mode, the full visitor/operator transcript.
 
 The SMS is sent *from* the service's own Twilio number (read off each webhook — the number that receives the buzz is SMS-capable), so there is no separate from-number to configure. Sending is best-effort: it authenticates with `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` and any failure is logged and swallowed, never touching the door decision. It stays off entirely unless `TWILIO_ACCOUNT_SID` and `NOTIFY_SMS_TO` are both set.
+
+Set `E2E_CALLER_NUMBER` on the deployed service to the test caller’s E.164 number. Summaries for that caller start with `[TEST]`, including denied calls.
+
+In passcode mode, the handler waits for Twilio to accept the notification before returning the opening or denial TwiML. This keeps notification submission inside the active Cloud Run request so CPU throttling after the response cannot stall it. It adds the Twilio API round-trip to the door response. The HTTP client uses a three-second timeout with no retries; sending failures still allow the door response. Other modes retain their existing background notification behavior.
+
+To measure latency, compare the `passcode: ... matched=...` log with `notify: accepted ... sid=... status=... elapsed_ms=...`. The elapsed time measures submission to Twilio, not delivery to the handset. Use the logged message SID to inspect its creation, send, and delivery-status update timestamps in Twilio. Compare those with when the notification appears on your phone.
+
+## Live phone end-to-end test
+
+`tests/test_phone_e2e.py` calls the deployed op9 number from a separate Twilio number, waits three seconds for the prompt, sends the correct passcode, and uses `<Gather>` to receive the returned unlock digit. The target must be running **passcode mode**. This verifies the telephone path and received DTMF, rather than just checking the server's opening decision. It does not exercise the physical lock or assert SMS delivery.
+
+Set these in your gitignored `.env` (see `.env.example`):
+
+```dotenv
+TWILIO_ACCOUNT_SID=your_account_sid
+TWILIO_AUTH_TOKEN=your_auth_token
+E2E_CALLER_NUMBER=+15550000001
+E2E_SERVICE_NUMBER=+15550000002
+E2E_PASSCODE=your_current_passcode
+E2E_CALLBACK_URL=https://op9-945926743915.us-central1.run.app/phone-test/dtmf
+E2E_GCP_PROJECT=operator9
+E2E_CLOUD_RUN_SERVICE=op9
+```
+
+The caller number must belong to your Twilio account and support voice. The service number is the existing op9 number. You can use `TWILIO_API_KEY` and `TWILIO_API_SECRET` together instead of the auth token for local API authentication; the test does not use your Twilio CLI profile. The deployed service must have `TWILIO_AUTH_TOKEN` to validate callback signatures. Normal Twilio call charges apply, and the service sends its normal notification for the call.
+
+Deploy the `/phone-test/dtmf` route before running the test. It validates Twilio's signature, logs the actual received digit with the caller CallSid, and returns Hangup. It never resolves approvals or changes the door state. The runner uses your local **gcloud login with Cloud Logging read permission** to poll for this exact call's receipt. No tunnel, additional service, or in-memory result store is needed. Log access is checked before placing a call.
+
+```bash
+RUN_PHONE_E2E=1 uv run pytest tests/test_phone_e2e.py -v -s --tb=short
+```
+
+Without `RUN_PHONE_E2E=1`, it skips without placing a call. Leave the opt-in out of `.env` so an ordinary test run stays offline. Run offline checks with:
+
+```bash
+MODE=auto uv run pytest -m 'not phone_e2e' -q
+```
+
+Each live run saves `result.json` under the gitignored `artifacts/phone-e2e/<run>/` directory (override with `E2E_ARTIFACT_DIR`). It includes the caller CallSid, received digit, result, and total duration; it excludes credentials and the passcode. The runner waits up to 90 seconds for the receipt, including Cloud Logging ingestion delay. API calls have separate timeouts. Cleanup attempts to stop an active call even on failure. The time until a receipt is observed includes log polling and is not a precise door-opening latency measurement.
+
