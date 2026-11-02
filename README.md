@@ -182,4 +182,3 @@ MODE=auto uv run pytest -m 'not phone_e2e' -q
 
 Each live run saves `result.json` under the gitignored `artifacts/phone-e2e/<run>/` directory (override with `E2E_ARTIFACT_DIR`). It includes the caller CallSid, received digit, result, and total duration; it excludes credentials and the passcode. The runner waits up to 90 seconds for the receipt, including Cloud Logging ingestion delay. API calls have separate timeouts. Cleanup attempts to stop an active call even on failure. The time until a receipt is observed includes log polling and is not a precise door-opening latency measurement.
 
-The initial audio-recording test received no audible unlock tone even though the service accepted the passcode. The current test collects DTMF signaling directly, and no longer records calls. The offline audio detector and synthetic fixtures remain available for investigation. Old recordings remain in Twilio and local artifact directories until deleted.

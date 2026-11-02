@@ -1,1 +1,1 @@
-"""Offline audio checks and opt-in live phone tests."""
+"""Phone integration tests and their helpers."""
