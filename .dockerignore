@@ -9,3 +9,5 @@ secrets/
 
 # Test-only; not needed at runtime.
 test_*.py
+tests/
+artifacts/

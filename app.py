@@ -253,7 +253,7 @@ async def voice(request: Request, background: BackgroundTasks) -> Response:
 
 
 @app.post("/passcode")
-async def passcode(request: Request, background: BackgroundTasks) -> Response:
+async def passcode(request: Request) -> Response:
     """Twilio gather callback: verify the DTMF passcode and open on a match."""
     form = await request.form()
     params = dict(form)
@@ -286,9 +286,11 @@ async def passcode(request: Request, background: BackgroundTasks) -> Response:
     # A timed-out call ("no passcode entered") is served by TwiML in
     # build_passcode_twiml and never reaches here, so it is not notified — the
     # same reason it leaves no "passcode:" log line. Every call that does reach
-    # here is a real decision worth a text. Queue it as a background task so the
-    # Twilio SMS round-trip never sits between this request and the TwiML.
-    background.add_task(
+    # here is a real decision worth a text. Wait for Twilio to accept it while
+    # this request still has CPU on Cloud Run. The network call runs in a thread
+    # so other calls can proceed; notify bounds its HTTP timeout and swallows
+    # failures so a notification outage does not prevent the opening response.
+    await asyncio.to_thread(
         notify.send_call_summary,
         mode="passcode",
         from_number=params.get("From"),
@@ -914,3 +916,25 @@ async def recording_status(request: Request) -> Response:
     )
 
     return Response(status_code=200)
+
+
+@app.post("/phone-test/dtmf")
+async def phone_test_dtmf(request: Request) -> Response:
+    """Receive the live test caller's Gather result; never changes door state."""
+    params = dict(await request.form())
+    # Unlike local voice development, this receipt must always be authenticated:
+    # otherwise a caller could fabricate a passing E2E result in the logs.
+    if not config.TWILIO_AUTH_TOKEN:
+        raise HTTPException(status_code=503, detail="Twilio authentication required")
+    _validate_twilio_request(request, params)
+    call_sid = str(params.get("CallSid", ""))
+    digits = str(params.get("Digits", ""))
+    if (
+        len(call_sid) != 34
+        or not call_sid.startswith("CA")
+        or any(c not in "0123456789abcdefABCDEF" for c in call_sid[2:])
+        or (digits and (len(digits) != 1 or digits not in "0123456789*#ABCD"))
+    ):
+        raise HTTPException(status_code=400, detail="Invalid Gather result")
+    log.info("phone-e2e: CallSid=%s Digits=%s", call_sid, digits or "(empty)")
+    return Response(content="<Response><Hangup/></Response>", media_type="application/xml")
