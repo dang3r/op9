@@ -1,0 +1,53 @@
+name: Deploy production
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  deploy:
+    if: github.repository == 'dang3r/op9'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    concurrency:
+      group: op9-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_PRODUCTION_SERVICE_ACCOUNT }}
+          create_credentials_file: false
+          token_format: access_token
+        id: auth
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+      - name: Deploy the main commit to op9
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLOUDSDK_AUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          set -euo pipefail
+          main_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+          if [[ "$main_sha" != "$GITHUB_SHA" ]]; then
+            echo "A newer main commit superseded this deployment." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          source_dir=$(mktemp -d)
+          git archive "$GITHUB_SHA" | tar -x -C "$source_dir"
+          revision=$(gcloud run deploy op9 --project operator9 --region us-central1 \
+            --source "$source_dir" --update-labels "commit-sha=$GITHUB_SHA" --quiet \
+            --format='value(status.latestReadyRevisionName)')
+          test -n "$revision"
+          gcloud run services describe op9 --project operator9 --region us-central1 --format=json |
+            jq -e --arg revision "$revision" '
+              any(.status.traffic[]; .revisionName == $revision and .percent == 100)'

@@ -8,19 +8,7 @@ Both Cloud Run services use project `operator9`, region `us-central1`.
 git push -u origin HEAD
 ```
 
-**Production.** After merge, deploy the committed source from `main` with the existing production settings. Run from the repository root.
-
-```sh
-(
-  set -eu
-  git fetch origin main
-  src=$(mktemp -d)
-  git archive --output="$src/main.tar" origin/main
-  mkdir "$src/source"
-  tar -xf "$src/main.tar" -C "$src/source"
-  gcloud run deploy op9 --source "$src/source" --project operator9 --region us-central1
-)
-```
+**Production.** GitHub Actions deploys the committed source on pushes to main. Check the Deploy production run for traffic verification.
 
 **Logs.** Look for the passcode decision in staging and the matching **caller** CallSid from the test report in production’s `phone-e2e` callback log.
 

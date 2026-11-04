@@ -6,7 +6,7 @@ The authorized build checks out the exact push-tip SHA on an uncredentialed runn
 
 A separate runner checks out trusted main, pushes the packaged image to the staging Artifact Registry repository, deploys the image by digest to `op9-staging`, and verifies the revision has 100% of traffic. A single concurrency group covers the deploy and call. GitHub can supersede pending jobs when multiple changes are queued. The running test keeps its slot until completion.
 
-The production number places an outbound call to the staging number. The staging number routes incoming calls to staging's `/voice` endpoint. Staging uses passcode mode, a separate Twilio subaccount and passcode, with SMS disabled. The caller's signed Gather callback goes to production and pytest checks the receipt for that exact caller CallSid. The workflow reports `staging/phone-e2e` on the tested head SHA for use as a required status check. Merging and production deployment are separate operations.
+The production number places an outbound call to the staging number. The staging number routes incoming calls to staging's `/voice` endpoint. Staging uses passcode mode, a separate Twilio subaccount and passcode, with SMS disabled. The caller's signed Gather callback goes to production and pytest checks the receipt for that exact caller CallSid. The workflow reports `staging/phone-e2e` on the tested head SHA for use as a required status check.
 
 Local phone tests use the numbers and passcode in the local environment.
 
@@ -28,3 +28,9 @@ The CI identity also has Artifact Registry Writer on the staging repository, Clo
 The staging caller records its incoming audio. After the live test finishes, the runner downloads the completed recording for that caller CallSid and runs Whisper locally. Open the status check on the tested commit to see its Actions run summary, including the transcript and received digit. A failed call still gets a summary. If the recording or transcription is unavailable, the summary says so. Only the signed Gather receipt determines whether the phone assertion passed.
 
 Audio stays in temporary runner storage and Twilio's recording store. The workflow publishes only the text. The restricted test key requires call recording list and recording read permissions.
+
+## Production on pushes to main
+
+Each push to main triggers a source deployment to `op9`, independently of the staging phone test. The workflow archives the pushed commit, deploys it with the existing runtime settings, and checks that the new revision serves all traffic. Deployments run one at a time and skip superseded main commits.
+
+Create a GitHub environment named `production` restricted to `main`. Set its `GCP_WORKLOAD_IDENTITY_PROVIDER` to a provider that trusts this repository's production workflow on main and its `GCP_PRODUCTION_SERVICE_ACCOUNT` to the deployer email. Restrict impersonation to the production environment subject. Grant the deployer Cloud Run Source Developer and Service Usage Consumer on the project and Service Account User on the production runtime identity. The Cloud Build service account handling source builds needs Cloud Run Builder on the project.
