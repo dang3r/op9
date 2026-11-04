@@ -107,8 +107,11 @@ jobs:
               .spec.template.spec.containers[0].image == $image and
               any(.status.traffic[]; .revisionName == $revision and .percent == 100)'
       - name: Call staging from the production number
+        id: phone
         env:
           E2E_LOG_VIEW: projects/operator9/locations/global/buckets/op9-e2e-receipts/views/receipts
+          E2E_ARTIFACT_DIR: ${{ runner.temp }}/phone-e2e
+          E2E_RECORD_INBOUND: "1"
           RUN_PHONE_E2E: "1"
           TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
           TWILIO_API_KEY: ${{ secrets.TWILIO_API_KEY }}
@@ -118,6 +121,38 @@ jobs:
           E2E_PASSCODE: ${{ secrets.E2E_PASSCODE }}
           E2E_CALLBACK_URL: ${{ vars.E2E_CALLBACK_URL }}
         run: uv run --no-sync pytest tests/test_phone_e2e.py -q -s --tb=line --show-capture=no
+
+      - name: Fetch incoming audio for this call
+        id: audio
+        if: always() && steps.phone.outcome != 'skipped'
+        continue-on-error: true
+        env:
+          E2E_ARTIFACT_DIR: ${{ runner.temp }}/phone-e2e
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_API_KEY: ${{ secrets.TWILIO_API_KEY }}
+          TWILIO_API_SECRET: ${{ secrets.TWILIO_API_SECRET }}
+        run: uv run --no-sync python scripts/phone_transcript.py fetch
+
+      - name: Transcribe on the runner
+        if: always() && steps.audio.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 4
+        env:
+          E2E_ARTIFACT_DIR: ${{ runner.temp }}/phone-e2e
+        run: uv run --no-project --isolated --python 3.11 --with faster-whisper==1.2.1 python scripts/phone_transcript.py transcribe
+
+      - name: Publish staging call summary
+        if: always()
+        continue-on-error: true
+        env:
+          E2E_ARTIFACT_DIR: ${{ runner.temp }}/phone-e2e
+          E2E_PASSCODE: ${{ secrets.E2E_PASSCODE }}
+        run: |
+          if test -f scripts/phone_transcript.py; then
+            python3 scripts/phone_transcript.py summary
+          else
+            echo 'Staging call transcript unavailable (runner setup incomplete).' >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   report:
     needs: [build, live-call]
