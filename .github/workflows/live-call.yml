@@ -94,14 +94,15 @@ jobs:
           gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
           docker tag "op9-staging:$TEST_SHA" "$IMAGE:$TEST_SHA"
           docker push "$IMAGE:$TEST_SHA"
-          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$TEST_SHA")
-          [[ "$digest" == "$IMAGE@sha256:"* ]]
+          digest=$(gcloud artifacts docker images describe "$IMAGE:$TEST_SHA" --format='value(image_summary.digest)')
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          image_ref="$IMAGE@$digest"
           revision=$(gcloud run deploy op9-staging --project operator9 --region us-central1 \
-            --image "$digest" --update-labels "commit-sha=$TEST_SHA" --quiet \
+            --image "$image_ref" --update-labels "commit-sha=$TEST_SHA" --quiet \
             --format='value(status.latestReadyRevisionName)')
           test -n "$revision"
           gcloud run services describe op9-staging --project operator9 --region us-central1 --format=json |
-            jq -e --arg revision "$revision" --arg image "$digest" '
+            jq -e --arg revision "$revision" --arg image "$image_ref" '
               .spec.template.spec.containers[0].image == $image and
               any(.status.traffic[]; .revisionName == $revision and .percent == 100)'
       - name: Call staging from the production number
