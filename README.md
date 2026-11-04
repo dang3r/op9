@@ -177,7 +177,7 @@ RUN_PHONE_E2E=1 uv run pytest tests/test_phone_e2e.py -v -s --tb=short
 Without `RUN_PHONE_E2E=1`, it skips without placing a call. Leave the opt-in out of `.env` so an ordinary test run stays offline. Run offline checks with:
 
 ```bash
-MODE=auto uv run pytest -m 'not phone_e2e' -q
+MODE=auto ANTHROPIC_API_KEY=offline-test-placeholder uv run --locked --group dev pytest -m 'not phone_e2e' -q
 ```
 
 Each live run saves `result.json` under the gitignored `artifacts/phone-e2e/<run>/` directory (override with `E2E_ARTIFACT_DIR`). It includes the caller CallSid, received digit, result, and total duration; it excludes credentials and the passcode. The runner waits up to 90 seconds for the receipt, including Cloud Logging ingestion delay. API calls have separate timeouts. Cleanup attempts to stop an active call even on failure. The time until a receipt is observed includes log polling and is not a precise door-opening latency measurement.
