@@ -12,7 +12,15 @@ jobs:
   live-call:
     # This calls the deployed service using the trusted base revision.
     # Never check out the PR head or execute commands from the PR payload.
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      github.repository == 'dang3r/op9' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor_id == '4911404' &&
+      github.triggering_actor == 'dang3r' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'pull_request_target' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.user.id == 4911404))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: phone-e2e

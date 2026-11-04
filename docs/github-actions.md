@@ -2,7 +2,7 @@
 
 Every pull request and push to `main` runs the offline pytest suite on Python 3.13 with the dependencies pinned in `uv.lock`. It runs without Twilio or Google credentials.
 
-Each PR targeting main triggers a real phone call on open, update, reopen, or ready-for-review, including fork PRs. The separate Live phone test workflow uses the base branch's code to exercise the deployed service. Only the offline workflow executes proposed PR code. You can also dispatch Live phone test manually from main. The deployed service must be running passcode mode with the signed Gather callback. A successful run prints the caller CallSid and confirms receipt of digit `9`.
+Live calls run automatically for PRs that dang3r opens from this repository into main, when dang3r opens, updates, reopens, or marks the PR ready for review. The job checks the original actor and the person requesting a rerun before it can access the phone-e2e environment. Fork PRs and other contributors receive offline tests only. Dang3r can also dispatch the live test from main. The live workflow exercises the deployed service using trusted main code. The deployed service must be running passcode mode with the signed Gather callback. A successful run prints the caller CallSid and confirms receipt of digit `9`.
 
 ## One-time setup for live calls
 
