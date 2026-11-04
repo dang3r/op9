@@ -8,7 +8,7 @@ Both Cloud Run services use project `operator9`, region `us-central1`.
 git push -u origin HEAD
 ```
 
-**Production.** GitHub Actions promotes the staging image after a PR merges into main. Wait for `staging/phone-e2e` before merging and update the PR branch if main has changed its source tree. Check the Deploy production run for the traffic verification.
+**Production.** GitHub Actions deploys the committed source on pushes to main. Check the Deploy production run for traffic verification.
 
 **Logs.** Look for the passcode decision in staging and the matching **caller** CallSid from the test report in production’s `phone-e2e` callback log.
 

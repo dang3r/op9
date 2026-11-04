@@ -29,10 +29,8 @@ The staging caller records its incoming audio. After the live test finishes, the
 
 Audio stays in temporary runner storage and Twilio's recording store. The workflow publishes only the text. The restricted test key requires call recording list and recording read permissions.
 
-## Production after merge
+## Production on pushes to main
 
-Before merging, wait for the latest staging phone check to pass and bring the branch up to date with main. The production workflow checks the PR head status and compares its Git tree with the merge commit. A mismatch or missing success fails verification. Merge, squash, and rebase commits qualify when their resulting trees match. Direct pushes do not trigger deployment.
+Each push to main triggers a source deployment to `op9`, independently of the staging phone test. The workflow archives the pushed commit, deploys it with the existing runtime settings, and checks that the new revision serves all traffic. Deployments run one at a time and skip superseded main commits.
 
-Create a GitHub environment named `production` restricted to `main`. Set its `GCP_WORKLOAD_IDENTITY_PROVIDER` to a provider that trusts this repository's production workflow on main and its `GCP_PRODUCTION_SERVICE_ACCOUNT` to the deployer email. Restrict impersonation to the production environment subject. Grant the deployer Artifact Registry Reader on the staging image repository, Cloud Run Developer on the production service, and Service Account User on the production runtime identity.
-
-The workflow resolves the staging image tagged with the PR head SHA and deploys its digest to `op9` with existing runtime settings. Deployments run one at a time and skip superseded main commits. The final step checks that the new revision serves all traffic.
+Create a GitHub environment named `production` restricted to `main`. Set its `GCP_WORKLOAD_IDENTITY_PROVIDER` to a provider that trusts this repository's production workflow on main and its `GCP_PRODUCTION_SERVICE_ACCOUNT` to the deployer email. Restrict impersonation to the production environment subject. Grant the deployer Cloud Run Source Developer and Service Usage Consumer on the project and Service Account User on the production runtime identity. The Cloud Build service account handling source builds needs Cloud Run Builder on the project.
