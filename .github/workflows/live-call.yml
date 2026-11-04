@@ -1,0 +1,172 @@
+name: Staging phone test
+
+on:
+  workflow_run:
+    workflows: [Tests]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  build:
+    if: >-
+      github.repository == 'dang3r/op9' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_branch != 'main' &&
+      github.event.workflow_run.actor.id == 4911404 &&
+      github.event.workflow_run.triggering_actor.id == 4911404 &&
+      github.triggering_actor == 'dang3r'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      TEST_SHA: ${{ github.event.workflow_run.head_sha }}
+      MODE: auto
+      ANTHROPIC_API_KEY: offline-test-placeholder
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.TEST_SHA }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
+        with:
+          python-version: "3.13"
+          version: "0.7.19"
+          enable-cache: false
+      - name: Test the exact commit to deploy
+        run: |
+          test "$(git rev-parse HEAD)" = "$TEST_SHA"
+          uv run --locked --group dev pytest -m 'not phone_e2e' -q
+      - name: Package tested commit
+        run: |
+          set -o pipefail
+          git archive "$TEST_SHA" | docker build --tag "op9-staging:$TEST_SHA" -
+          docker save "op9-staging:$TEST_SHA" | gzip -1 > "$RUNNER_TEMP/image.tar.gz"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: staging-image-${{ env.TEST_SHA }}
+          path: ${{ runner.temp }}/image.tar.gz
+          overwrite: true
+          retention-days: 1
+          compression-level: 0
+
+  live-call:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: phone-e2e
+    concurrency:
+      group: op9-staging-deploy-and-call
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TEST_SHA: ${{ github.event.workflow_run.head_sha }}
+      IMAGE: us-central1-docker.pkg.dev/operator9/op9-staging/op9
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
+        with:
+          python-version: "3.13"
+          version: "0.7.19"
+          enable-cache: false
+      - run: uv sync --locked --group dev
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: staging-image-${{ env.TEST_SHA }}
+          path: ${{ runner.temp }}/staging-image
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_LOG_READER_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+      - name: Deploy the tested image and verify staging traffic
+        run: |
+          set -euo pipefail
+          docker load -i "$RUNNER_TEMP/staging-image/image.tar.gz"
+          gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+          docker tag "op9-staging:$TEST_SHA" "$IMAGE:$TEST_SHA"
+          docker push "$IMAGE:$TEST_SHA"
+          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$TEST_SHA")
+          [[ "$digest" == "$IMAGE@sha256:"* ]]
+          revision=$(gcloud run deploy op9-staging --project operator9 --region us-central1 \
+            --image "$digest" --update-labels "commit-sha=$TEST_SHA" --quiet \
+            --format='value(status.latestReadyRevisionName)')
+          test -n "$revision"
+          gcloud run services describe op9-staging --project operator9 --region us-central1 --format=json |
+            jq -e --arg revision "$revision" --arg image "$digest" '
+              .spec.template.spec.containers[0].image == $image and
+              any(.status.traffic[]; .revisionName == $revision and .percent == 100)'
+      - name: Call staging from the production number
+        id: phone
+        env:
+          E2E_LOG_VIEW: projects/operator9/locations/global/buckets/op9-e2e-receipts/views/receipts
+          E2E_ARTIFACT_DIR: ${{ runner.temp }}/phone-e2e
+          E2E_RECORD_INBOUND: "1"
+          RUN_PHONE_E2E: "1"
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_API_KEY: ${{ secrets.TWILIO_API_KEY }}
+          TWILIO_API_SECRET: ${{ secrets.TWILIO_API_SECRET }}
+          E2E_CALLER_NUMBER: ${{ secrets.E2E_CALLER_NUMBER }}
+          E2E_SERVICE_NUMBER: ${{ secrets.E2E_SERVICE_NUMBER }}
+          E2E_PASSCODE: ${{ secrets.E2E_PASSCODE }}
+          E2E_CALLBACK_URL: ${{ vars.E2E_CALLBACK_URL }}
+        run: uv run --no-sync pytest tests/test_phone_e2e.py -q -s --tb=line --show-capture=no
+
+      - name: Fetch incoming audio for this call
+        id: audio
+        if: always() && steps.phone.outcome != 'skipped'
+        continue-on-error: true
+        env:
+          E2E_ARTIFACT_DIR: ${{ runner.temp }}/phone-e2e
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_API_KEY: ${{ secrets.TWILIO_API_KEY }}
+          TWILIO_API_SECRET: ${{ secrets.TWILIO_API_SECRET }}
+        run: uv run --no-sync python scripts/phone_transcript.py fetch
+
+      - name: Transcribe on the runner
+        if: always() && steps.audio.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 4
+        env:
+          E2E_ARTIFACT_DIR: ${{ runner.temp }}/phone-e2e
+        run: uv run --no-project --isolated --python 3.11 --with faster-whisper==1.2.1 python scripts/phone_transcript.py transcribe
+
+      - name: Publish staging call summary
+        if: always()
+        continue-on-error: true
+        env:
+          E2E_ARTIFACT_DIR: ${{ runner.temp }}/phone-e2e
+          E2E_PASSCODE: ${{ secrets.E2E_PASSCODE }}
+        run: |
+          if test -f scripts/phone_transcript.py; then
+            python3 scripts/phone_transcript.py summary
+          else
+            echo 'Staging call transcript unavailable (runner setup incomplete).' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  report:
+    needs: [build, live-call]
+    if: always() && needs.build.result != 'skipped'
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+    steps:
+      - name: Report result on the tested PR commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TEST_SHA: ${{ github.event.workflow_run.head_sha }}
+          PASSED: ${{ needs.build.result == 'success' && needs.live-call.result == 'success' }}
+        run: |
+          state=failure
+          if [[ "$PASSED" == true ]]; then state=success; fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$TEST_SHA" \
+            -f state="$state" -f context='staging/phone-e2e' \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

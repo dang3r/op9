@@ -63,6 +63,8 @@ def test_correct_passcode_returns_unlock_tone():
             from_=caller,
             to=service,
             twiml=instructions,
+            record=os.getenv("E2E_RECORD_INBOUND") == "1",
+            recording_track="inbound",
             timeout=30,
         )
         report["call_sid"] = call.sid

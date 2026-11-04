@@ -1,6 +1,7 @@
 """Caller instructions and Cloud Logging receipts for the live Gather test."""
 
 import json
+import os
 import re
 import subprocess
 from urllib.parse import urlparse
@@ -41,9 +42,11 @@ def fetch_receipt(call_sid: str, since: str, project: str, service: str) -> str 
         "timestamp>=" + json.dumps(since),
         "textPayload:" + json.dumps(f"phone-e2e: CallSid={call_sid} "),
     ]
+    view = os.getenv("E2E_LOG_VIEW")
+    scope = ["--resource-names", view] if view else []
     result = subprocess.run(
         ["gcloud", "logging", "read", " AND ".join(filters),
-         "--project", project, "--limit", "20", "--format=json"],
+         "--project", project, *scope, "--limit", "20", "--format=json"],
         check=True, capture_output=True, text=True, timeout=20,
     )
     return receipt_from_logs(json.loads(result.stdout), call_sid)
