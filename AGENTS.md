@@ -2,7 +2,7 @@
 
 Both Cloud Run services use project `operator9`, region `us-central1`.
 
-**Staging.** From a feature branch, push as `dang3r`. Once the staging workflow is on `main`, successful offline CI triggers deployment and a live call for that push’s tip commit. Check `staging/phone-e2e` on that SHA.
+**Staging.** From a feature branch, push as `dang3r`. On a branch allowed by the `phone-e2e` environment, the feature branch’s staging workflow runs offline tests before deploying and calling that push’s tip commit. Check `staging/phone-e2e` on that SHA.
 
 ```sh
 git push -u origin HEAD
