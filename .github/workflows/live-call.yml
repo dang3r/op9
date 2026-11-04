@@ -153,12 +153,14 @@ jobs:
             echo 'Staging call transcript unavailable (runner setup incomplete).' >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Attach staging call transcript
+      - name: Attach staging call audio and transcript
         if: always() && steps.phone.outcome != 'skipped'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: staging-call-transcript-${{ env.TEST_SHA }}
-          path: ${{ runner.temp }}/phone-e2e/call-transcript.txt
+          name: staging-call-audit-${{ env.TEST_SHA }}
+          path: |
+            ${{ runner.temp }}/phone-e2e/incoming.wav
+            ${{ runner.temp }}/phone-e2e/call-transcript.txt
           if-no-files-found: warn
 
   report:
