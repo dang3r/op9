@@ -1,14 +1,14 @@
 # Running tests on GitHub
 
-Every pull request and push to `main` runs the offline pytest suite on Python 3.13 with the dependencies pinned in `uv.lock`. It runs without Twilio or Google credentials.
+Pushes to repository branches and fork pull requests run offline tests. After successful push CI on a feature branch, a trusted workflow on main checks the exact push-tip SHA with GitHub. Staging requires dang3r as the push actor, rerun actor, commit author, and verified signer. Unsigned commits get offline coverage only. A multi-commit push stages its tip. No PR is required.
 
-For an eligible owner PR targeting main, the trusted **Staging phone test** workflow takes the head SHA from the event, checks it out on an uncredentialed runner, runs the offline tests, and builds a Linux image from a git archive of that same SHA. The build job must pass before the deployment job can obtain credentials. Forks and non-owner PRs get only the ordinary offline checks.
+The authorized build checks out the verified SHA on an uncredentialed runner, runs the offline tests, and builds a Linux image from a git archive of that SHA.
 
 A separate runner checks out trusted main, pushes the packaged image to the staging Artifact Registry repository, deploys the image by digest to `op9-staging`, and verifies the revision has 100% of traffic. A single concurrency group covers the deploy and call. GitHub can supersede pending jobs when multiple changes are queued. The running test keeps its slot until completion.
 
 The production number places an outbound call to the staging number. The staging number routes incoming calls to staging's `/voice` endpoint. Staging uses passcode mode, a separate Twilio subaccount and passcode, with SMS disabled. The caller's signed Gather callback goes to production and pytest checks the receipt for that exact caller CallSid. The workflow reports `staging/phone-e2e` on the tested head SHA for use as a required status check. Merging and production deployment are separate operations.
 
-Owner dispatch from main stages the selected main commit. Local phone tests use the numbers and passcode in the local environment.
+Local phone tests use the numbers and passcode in the local environment.
 
 ## One-time setup for live calls
 

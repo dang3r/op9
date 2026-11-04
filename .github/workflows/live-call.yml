@@ -1,31 +1,51 @@
 name: Staging phone test
 
 on:
-  pull_request_target:
-    branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review]
-  workflow_dispatch:
+  workflow_run:
+    workflows: [Tests]
+    types: [completed]
 
 permissions: {}
 
 jobs:
-  build:
-    # PR code runs only on this disposable runner, without deployment credentials.
+  authorize:
     if: >-
       github.repository == 'dang3r/op9' &&
-      github.ref == 'refs/heads/main' &&
-      github.actor_id == '4911404' &&
-      github.triggering_actor == 'dang3r' &&
-      (github.event_name == 'workflow_dispatch' ||
-       (github.event_name == 'pull_request_target' &&
-        github.event.pull_request.head.repo.full_name == github.repository &&
-        github.event.pull_request.user.id == 4911404))
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_branch != 'main' &&
+      github.event.workflow_run.actor.id == 4911404 &&
+      github.event.workflow_run.triggering_actor.id == 4911404 &&
+      github.triggering_actor == 'dang3r'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      signed: ${{ steps.verify.outputs.signed }}
+    steps:
+      - id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          query='query($sha: GitObjectID!) { repository(owner:"dang3r", name:"op9") { object(oid:$sha) { ... on Commit { oid author { user { databaseId } } signature { isValid state signer { databaseId } } } } } }'
+          signed=$(gh api graphql -f query="$query" -f sha="$SHA" | jq -r --arg sha "$SHA" '
+            .data.repository.object | .oid == $sha and .author.user.databaseId == 4911404 and
+            .signature.isValid == true and .signature.state == "VALID" and .signature.signer.databaseId == 4911404')
+          echo "signed=$signed" >> "$GITHUB_OUTPUT"
+          if [[ "$signed" != true ]]; then echo 'Staging skipped: owner signature required.' >> "$GITHUB_STEP_SUMMARY"; fi
+
+  build:
+    needs: authorize
+    if: needs.authorize.outputs.signed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
     env:
-      TEST_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      TEST_SHA: ${{ github.event.workflow_run.head_sha }}
       MODE: auto
       ANTHROPIC_API_KEY: offline-test-placeholder
     steps:
@@ -67,7 +87,7 @@ jobs:
       contents: read
       id-token: write
     env:
-      TEST_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      TEST_SHA: ${{ github.event.workflow_run.head_sha }}
       IMAGE: us-central1-docker.pkg.dev/operator9/op9-staging/op9
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -156,7 +176,7 @@ jobs:
 
   report:
     needs: [build, live-call]
-    if: always() && github.event_name == 'pull_request_target' && needs.build.result != 'skipped'
+    if: always() && needs.build.result != 'skipped'
     runs-on: ubuntu-latest
     permissions:
       statuses: write
@@ -164,7 +184,7 @@ jobs:
       - name: Report result on the tested PR commit
         env:
           GH_TOKEN: ${{ github.token }}
-          TEST_SHA: ${{ github.event.pull_request.head.sha }}
+          TEST_SHA: ${{ github.event.workflow_run.head_sha }}
           PASSED: ${{ needs.build.result == 'success' && needs.live-call.result == 'success' }}
         run: |
           state=failure
