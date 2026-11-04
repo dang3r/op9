@@ -1,0 +1,75 @@
+name: Deploy production
+
+on:
+  pull_request:
+    branches: [main]
+    types: [closed]
+
+permissions: {}
+
+jobs:
+  verify:
+    if: github.event.pull_request.merged && github.repository == 'dang3r/op9'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+    steps:
+      - name: Require a successful staging call for the merged source
+        run: |
+          set -euo pipefail
+          repo="repos/$GITHUB_REPOSITORY"
+          gh api --paginate "$repo/commits/$HEAD_SHA/statuses?per_page=100" --slurp |
+            jq -e 'flatten | map(select(.context == "staging/phone-e2e")) | first |
+              .state == "success" and .creator.login == "github-actions[bot]"'
+          test "$(gh api "$repo/git/commits/$HEAD_SHA" --jq .tree.sha)" = \
+               "$(gh api "$repo/git/commits/$MERGE_SHA" --jq .tree.sha)"
+
+  deploy:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    concurrency:
+      group: op9-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      IMAGE: us-central1-docker.pkg.dev/operator9/op9-staging/op9
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+    steps:
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_PRODUCTION_SERVICE_ACCOUNT }}
+          create_credentials_file: false
+          token_format: access_token
+        id: auth
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+      - name: Promote the staging image to op9
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLOUDSDK_AUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          set -euo pipefail
+          digest=$(gcloud artifacts docker images describe "$IMAGE:$HEAD_SHA" --format='value(image_summary.digest)')
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          if [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" != "$MERGE_SHA" ]]; then
+            echo "A newer main commit superseded this deployment." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          revision=$(gcloud run deploy op9 --project operator9 --region us-central1 \
+            --image "$IMAGE@$digest" --update-labels "commit-sha=$MERGE_SHA" --quiet \
+            --format='value(status.latestReadyRevisionName)')
+          test -n "$revision"
+          gcloud run services describe op9 --project operator9 --region us-central1 --format=json |
+            jq -e --arg revision "$revision" --arg image "$IMAGE@$digest" '
+              .spec.template.spec.containers[0].image == $image and
+              any(.status.traffic[]; .revisionName == $revision and .percent == 100)'
