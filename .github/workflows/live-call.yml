@@ -8,7 +8,7 @@ on:
 permissions: {}
 
 jobs:
-  authorize:
+  build:
     if: >-
       github.repository == 'dang3r/op9' &&
       github.event.workflow_run.event == 'push' &&
@@ -18,28 +18,6 @@ jobs:
       github.event.workflow_run.actor.id == 4911404 &&
       github.event.workflow_run.triggering_actor.id == 4911404 &&
       github.triggering_actor == 'dang3r'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    outputs:
-      signed: ${{ steps.verify.outputs.signed }}
-    steps:
-      - id: verify
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          set -euo pipefail
-          query='query($sha: GitObjectID!) { repository(owner:"dang3r", name:"op9") { object(oid:$sha) { ... on Commit { oid author { user { databaseId } } signature { isValid state signer { databaseId } } } } } }'
-          signed=$(gh api graphql -f query="$query" -f sha="$SHA" | jq -r --arg sha "$SHA" '
-            .data.repository.object | .oid == $sha and .author.user.databaseId == 4911404 and
-            .signature.isValid == true and .signature.state == "VALID" and .signature.signer.databaseId == 4911404')
-          echo "signed=$signed" >> "$GITHUB_OUTPUT"
-          if [[ "$signed" != true ]]; then echo 'Staging skipped: owner signature required.' >> "$GITHUB_STEP_SUMMARY"; fi
-
-  build:
-    needs: authorize
-    if: needs.authorize.outputs.signed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

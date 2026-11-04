@@ -1,8 +1,8 @@
 # Running tests on GitHub
 
-Pushes to repository branches and fork pull requests run offline tests. After successful push CI on a feature branch, a trusted workflow on main checks the exact push-tip SHA with GitHub. Staging requires dang3r as the push actor, rerun actor, commit author, and verified signer. Unsigned commits get offline coverage only. A multi-commit push stages its tip. No PR is required.
+Pushes to repository branches and fork pull requests run offline tests. After offline tests pass on a feature-branch push to dang3r/op9, staging runs if GitHub identifies dang3r as the pusher and as the actor for any rerun. This applies to signed and unsigned commits. A multi-commit push stages its tip. No PR is required.
 
-The authorized build checks out the verified SHA on an uncredentialed runner, runs the offline tests, and builds a Linux image from a git archive of that SHA.
+The authorized build checks out the exact push-tip SHA on an uncredentialed runner, runs the offline tests, and builds a Linux image from a git archive of that SHA.
 
 A separate runner checks out trusted main, pushes the packaged image to the staging Artifact Registry repository, deploys the image by digest to `op9-staging`, and verifies the revision has 100% of traffic. A single concurrency group covers the deploy and call. GitHub can supersede pending jobs when multiple changes are queued. The running test keeps its slot until completion.
 
