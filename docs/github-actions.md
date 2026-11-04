@@ -2,7 +2,7 @@
 
 Every pull request and push to `main` runs the offline pytest suite on Python 3.13 with the dependencies pinned in `uv.lock`. It runs without Twilio or Google credentials.
 
-To place one real test call, open **Actions → Tests → Run workflow**, select `main`, and enable **Place one billable Twilio test call**. This runs after the offline suite passes. The deployed service must be running passcode mode with the signed Gather callback. A successful run prints the caller CallSid and confirms receipt of digit `9`.
+Each PR targeting main triggers a real phone call on open, update, reopen, or ready-for-review, including fork PRs. The separate Live phone test workflow uses the base branch's code to exercise the deployed service. Only the offline workflow executes proposed PR code. You can also dispatch Live phone test manually from main. The deployed service must be running passcode mode with the signed Gather callback. A successful run prints the caller CallSid and confirms receipt of digit `9`.
 
 ## One-time setup for live calls
 
@@ -15,4 +15,4 @@ Create a GitHub environment named `phone-e2e` and restrict deployments to `main`
 | Variable | `E2E_CALLBACK_URL` | Full HTTPS URL ending in `/phone-test/dtmf` on the deployed op9 service |
 | Variables | `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_LOG_READER_SERVICE_ACCOUNT` | Full provider resource name and email of the Cloud Logging reader service account |
 
-Configure [Google Workload Identity Federation](https://github.com/google-github-actions/auth#setup) for this repository, restricting the trust relationship to the `main` ref and `phone-e2e` environment. Grant the federated identity permission to impersonate the service account and grant that account Logs Viewer in the `operator9` project. The runner reads the callback receipt from Cloud Logging and uses short-lived Google credentials.
+Configure [Google Workload Identity Federation](https://github.com/google-github-actions/auth#setup) for this repository, restricting the trust relationship to the `main` ref and `phone-e2e` environment. Grant the federated identity permission to impersonate the service account and grant that account Logs View Accessor on the dedicated `receipts` log view. The view reads the one-day `op9-e2e-receipts` bucket, fed by a sink filtered to op9 digit receipts. The runner reads the callback receipt from Cloud Logging and uses short-lived Google credentials.
