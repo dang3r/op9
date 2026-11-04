@@ -46,6 +46,8 @@ def summary(directory, report):
     code = os.getenv("E2E_PASSCODE")
     if code:
         speech = speech.replace(code, "[redacted]")
+    if path.exists():
+        (directory / "call-transcript.txt").write_text((speech or "No speech detected.") + "\n")
     digit = report.get("received_digits")
     observed = digit if digit in list("0123456789*#ABCD") else "none"
     return (f"### Staging phone call\n\nCommit `{os.environ['TEST_SHA']}` · "
